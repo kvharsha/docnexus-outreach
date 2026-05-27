@@ -1,13 +1,82 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
   provider = "prisma-client"
-  output   = "../lib/generated/prisma"
+  output   = "../generated/prisma"
 }
 
 datasource db {
   provider = "sqlite"
+  // url      = env("DATABASE_URL")
+}
+
+model Physician {
+  id                  String   @id @default(uuid())
+  npi                 String   @unique
+  firstName           String
+  lastName            String
+  specialty           String
+  subSpecialty        String?
+  affiliation         String
+  city                String
+  state               String
+  email               String
+  npiRegistrationYear Int
+  acceptingPatients   Boolean  @default(true)
+  boardCertified      Boolean  @default(true)
+  enrollments         CampaignEnrollment[]
+}
+
+model Campaign {
+  id          String   @id @default(uuid())
+  name        String
+  type        String
+  status      String   @default("draft")
+  createdAt   DateTime @default(now())
+  sequences   SequenceStep[]
+  enrollments CampaignEnrollment[]
+  sentMessages SentMessage[]
+  pendingSends PendingSend[]
+}
+
+model SequenceStep {
+  id              String   @id @default(uuid())
+  campaignId      String
+  campaign        Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  stepNumber      Int
+  delayDays       Int
+  subjectTemplate String
+  bodyTemplate    String
+  @@unique([campaignId, stepNumber])
+}
+
+model CampaignEnrollment {
+  id          String   @id @default(uuid())
+  campaignId  String
+  physicianId String
+  status      String   @default("pending")
+  campaign    Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  physician   Physician @relation(fields: [physicianId], references: [id])
+  @@unique([campaignId, physicianId])
+}
+
+model SentMessage {
+  id            String   @id @default(uuid())
+  campaignId    String
+  physicianId   String
+  stepNumber    Int
+  subject       String
+  body          String
+  simulated     Boolean  @default(true)
+  smtpMessageId String?
+  sentAt        DateTime @default(now())
+  campaign      Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+}
+
+model PendingSend {
+  id          String   @id @default(uuid())
+  campaignId  String
+  physicianId String
+  stepNumber  Int
+  createdAt   DateTime @default(now())
+  campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  @@unique([campaignId, physicianId, stepNumber])
 }
