@@ -11,6 +11,8 @@ export const physicianQuerySchema = z.object({
   specialty: z.string().trim().min(1).optional(),
   state: z.string().trim().min(1).optional(),
   affiliation: z.string().trim().min(1).optional(),
+  // Not in the original API contract — added so the discovery UI can filter by sub-specialty too.
+  subSpecialty: z.string().trim().min(1).optional(),
   search: z.string().trim().min(1).optional(),
   minYearsExperience: z.coerce.number().int().min(0).max(MAX_YEARS_EXPERIENCE).optional(),
   page: z.coerce.number().int().min(1).default(DEFAULT_PAGE),
