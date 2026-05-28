@@ -48,3 +48,5 @@ CLAUDE.md
 
 # Prisma generated client (v7+ generates outside node_modules)
 generated/
+*.db
+*.db-journal

@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import {
   CampaignNotDraftError,
   CampaignNotFoundError,
+  drainPendingSends,
   launchCampaign,
 } from "@/lib/services/campaigns";
 
@@ -11,6 +12,14 @@ export async function PATCH(_request: NextRequest, { params }: { params: Promise
 
   try {
     const result = await launchCampaign(id);
+
+    // Hand off the actual sending to a background drain so the request returns immediately.
+    // setImmediate runs after the response is flushed; .catch keeps a drain failure from
+    // becoming an unhandled rejection that takes down the process.
+    setImmediate(() => {
+      drainPendingSends(id).catch(console.error);
+    });
+
     // 202: the queue is written and the campaign is active, but the actual sends drain afterward.
     return NextResponse.json(result, { status: 202 });
   } catch (err) {

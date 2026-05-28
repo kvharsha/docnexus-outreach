@@ -1,4 +1,6 @@
 import { prisma } from "@/lib/db";
+import { generatePersonalizedEmail } from "@/lib/services/ai";
+import { sendOrSimulate } from "@/lib/services/mailer";
 import type { CreateCampaignInput } from "@/lib/validators/campaigns";
 
 // Typed errors so the route layer can map them to the right status code without sniffing strings.
@@ -117,4 +119,81 @@ export async function getCampaignProgress(id: string) {
     simulated,
     real,
   };
+}
+
+// Fire-and-forget worker kicked off by the launch route via setImmediate. Walks the PendingSend
+// queue one row at a time: personalize → send → record → delete. Pacing lives in the mailer, so
+// this loop just awaits each send. If the process dies mid-drain, the undeleted PendingSend rows
+// are the resume point — a re-launch endpoint would pick them back up (noted as future work).
+export async function drainPendingSends(campaignId: string) {
+  const queue = await prisma.pendingSend.findMany({
+    where: { campaignId },
+    orderBy: { createdAt: "asc" },
+  });
+
+  for (const item of queue) {
+    const [physician, step] = await Promise.all([
+      prisma.physician.findUnique({ where: { id: item.physicianId } }),
+      prisma.sequenceStep.findUnique({
+        where: { campaignId_stepNumber: { campaignId, stepNumber: item.stepNumber } },
+      }),
+    ]);
+
+    // A missing physician or step means the data was tampered with between launch and drain.
+    // Nothing useful to send, so drop the row and move on rather than wedging the queue.
+    if (!physician || !step) {
+      await prisma.pendingSend.delete({ where: { id: item.id } });
+      continue;
+    }
+
+    let email: { subject: string; body: string };
+    try {
+      email = await generatePersonalizedEmail({
+        brief: step.bodyTemplate,
+        physician,
+        stepNumber: item.stepNumber,
+      });
+    } catch (err) {
+      // Gemini choked on this one. Mark the enrollment bounced so the dashboard shows the failure,
+      // then drop the pending row so the queue keeps draining instead of stalling on a bad recipient.
+      console.error(`drain: AI failed for physician ${physician.id} in campaign ${campaignId}`, err);
+      await prisma.campaignEnrollment.updateMany({
+        where: { campaignId, physicianId: physician.id },
+        data: { status: "bounced" },
+      });
+      await prisma.pendingSend.delete({ where: { id: item.id } });
+      continue;
+    }
+
+    const result = await sendOrSimulate({
+      to: physician.email,
+      subject: email.subject,
+      body: email.body,
+    });
+
+    // Record the send, advance the enrollment, and clear the queue row as one logical step.
+    await prisma.$transaction([
+      prisma.sentMessage.create({
+        data: {
+          campaignId,
+          physicianId: physician.id,
+          stepNumber: item.stepNumber,
+          subject: email.subject,
+          body: email.body,
+          simulated: result.simulated,
+          smtpMessageId: result.messageId ?? null,
+        },
+      }),
+      prisma.campaignEnrollment.updateMany({
+        where: { campaignId, physicianId: physician.id },
+        data: { status: "contacted" },
+      }),
+      prisma.pendingSend.delete({ where: { id: item.id } }),
+    ]);
+  }
+
+  await prisma.campaign.update({
+    where: { id: campaignId },
+    data: { status: "completed" },
+  });
 }
