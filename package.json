@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:prod-setup": "node scripts/use-postgres.mjs && prisma generate && prisma db push --accept-data-loss",
+    "vercel-build": "npm run db:prod-setup && next build"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -14,7 +16,9 @@
   "dependencies": {
     "@google/genai": "^2.6.0",
     "@hookform/resolvers": "^5.4.0",
+    "@neondatabase/serverless": "^1.1.0",
     "@prisma/adapter-better-sqlite3": "^7.8.0",
+    "@prisma/adapter-neon": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "better-sqlite3": "^12.10.0",
     "class-variance-authority": "^0.7.1",

@@ -4,8 +4,13 @@ generator client {
 }
 
 datasource db {
+  // Prisma forbids env() in `provider` (P1012), so it can't be one schema for both engines at once.
+  // Local dev = SQLite; prod = Neon Postgres. The Vercel build swaps this to "postgresql" before
+  // `prisma generate` (see the `db:prod-setup` script + the deploy note in CLAUDE.md). lib/db.ts and
+  // seed.ts pick the matching driver adapter at runtime from DATABASE_URL.
   provider = "sqlite"
-  // url      = env("DATABASE_URL")
+  // url commented out — the driver adapter (lib/db.ts) supplies the connection at runtime;
+  // CLI commands read DATABASE_URL via prisma.config.ts.
 }
 
 model Physician {

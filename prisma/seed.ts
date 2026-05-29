@@ -2,11 +2,14 @@
 
 import "dotenv/config";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
+import { PrismaNeon } from "@prisma/adapter-neon";
 import { PrismaClient } from "../generated/prisma/client";
 
-const adapter = new PrismaBetterSqlite3({
-  url: process.env.DATABASE_URL ?? "file:./dev.db",
-});
+// Same SQLite-vs-Neon switch as lib/db.ts, so `prisma db seed` works locally and against Neon.
+const url = process.env.DATABASE_URL ?? "file:./dev.db";
+const adapter = url.startsWith("file:")
+  ? new PrismaBetterSqlite3({ url })
+  : new PrismaNeon({ connectionString: url });
 const prisma = new PrismaClient({ adapter });
 
 type Seed = {
