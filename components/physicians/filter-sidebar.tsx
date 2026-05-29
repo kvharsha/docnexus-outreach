@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import type { PhysicianFilterOptions } from "@/lib/services/physicians";
+import { PHYSICIAN_FILTER_KEYS } from "@/lib/validators/physicians";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -63,9 +64,29 @@ export function FilterSidebar({ options }: Props) {
     { key: "affiliation", label: "Affiliation", values: options.affiliations },
   ];
 
+  // Reflect the committed URL state, not the debounced local inputs, so the button matches reality.
+  const hasActiveFilter = PHYSICIAN_FILTER_KEYS.some((key) => searchParams.get(key));
+
+  const clearAll = () => {
+    setSearch("");
+    setMinYears("");
+    router.push(pathname);
+  };
+
   return (
     <aside className="sticky top-0 h-fit w-70 shrink-0 border-r border-zinc-200 bg-white p-5">
-      <h2 className="pb-4 text-sm font-semibold text-zinc-950">Filters</h2>
+      <div className="flex items-center justify-between pb-4">
+        <h2 className="text-sm font-semibold text-zinc-950">Filters</h2>
+        {hasActiveFilter && (
+          <button
+            type="button"
+            onClick={clearAll}
+            className="text-xs text-zinc-500 transition-colors hover:text-zinc-950"
+          >
+            Clear all filters
+          </button>
+        )}
+      </div>
 
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">

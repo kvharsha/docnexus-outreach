@@ -1,7 +1,7 @@
 import { listPhysicianFilterOptions, listPhysicians } from "@/lib/services/physicians";
-import { physicianQuerySchema } from "@/lib/validators/physicians";
+import { PHYSICIAN_FILTER_KEYS, physicianQuerySchema } from "@/lib/validators/physicians";
 import { FilterSidebar } from "@/components/physicians/filter-sidebar";
-import { PhysicianCard } from "@/components/physicians/physician-card";
+import { PhysicianGrid } from "@/components/physicians/physician-grid";
 import { SelectionBar } from "@/components/physicians/selection-bar";
 import { SelectionProvider } from "@/components/physicians/selection-provider";
 
@@ -18,6 +18,10 @@ export default async function PhysiciansPage({ searchParams }: { searchParams: S
   }
   const parsed = physicianQuerySchema.safeParse(params);
   const query = parsed.success ? parsed.data : physicianQuerySchema.parse({});
+
+  // Pin selected-to-top only on the clean, unfiltered list. Once any filter is on, the order should
+  // reflect the query so the user can scan the filtered set without selections jumping around.
+  const hasActiveFilter = PHYSICIAN_FILTER_KEYS.some((key) => params[key]);
 
   const [{ data, total }, options] = await Promise.all([
     listPhysicians(query),
@@ -46,11 +50,7 @@ export default async function PhysiciansPage({ searchParams }: { searchParams: S
                 </p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-                {data.map((physician) => (
-                  <PhysicianCard key={physician.id} physician={physician} />
-                ))}
-              </div>
+              <PhysicianGrid physicians={data} pinSelected={!hasActiveFilter} />
             )}
           </div>
 

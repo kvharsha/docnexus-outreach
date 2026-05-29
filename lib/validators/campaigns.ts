@@ -23,3 +23,32 @@ export const createCampaignSchema = z
 
 export type SequenceStepInput = z.infer<typeof sequenceStepSchema>;
 export type CreateCampaignInput = z.infer<typeof createCampaignSchema>;
+
+// Generate a per-physician override draft in the builder, before the campaign exists — so there's
+// no campaignId yet. brief is the shared bodyTemplate the user has typed so far, if any.
+export const draftOverrideSchema = z.object({
+  campaignName: z.string().trim().min(1),
+  campaignType: z.enum(["cold_outbound", "reengagement", "conference_followup"]),
+  stepNumber: z.number().int().min(1),
+  physicianId: z.string().min(1),
+  brief: z.string().optional(),
+  // Free-text the sender types about *this* physician ("we met at ASCO 2025…"). Shapes the draft;
+  // it's an input to generation only, never stored on the final email.
+  instruction: z.string().optional(),
+});
+
+export type DraftOverrideInput = z.infer<typeof draftOverrideSchema>;
+
+const overrideEntrySchema = z.object({
+  physicianId: z.string().min(1),
+  stepNumber: z.number().int().min(1),
+  subject: z.string().trim().min(1),
+  body: z.string().trim().min(1),
+});
+
+// Persist the overrides the user accumulated in the builder, after the campaign is created.
+export const persistOverridesSchema = z.object({
+  overrides: z.array(overrideEntrySchema).min(1),
+});
+
+export type PersistOverridesInput = z.infer<typeof persistOverridesSchema>;

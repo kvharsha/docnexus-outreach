@@ -23,6 +23,7 @@ model Physician {
   acceptingPatients   Boolean  @default(true)
   boardCertified      Boolean  @default(true)
   enrollments         CampaignEnrollment[]
+  overrides           CampaignDraftOverride[]
 }
 
 model Campaign {
@@ -35,6 +36,7 @@ model Campaign {
   enrollments CampaignEnrollment[]
   sentMessages SentMessage[]
   pendingSends PendingSend[]
+  overrides   CampaignDraftOverride[]
 }
 
 model SequenceStep {
@@ -78,5 +80,20 @@ model PendingSend {
   stepNumber  Int
   createdAt   DateTime @default(now())
   campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  @@unique([campaignId, physicianId, stepNumber])
+}
+
+// Optional per-physician override of the shared SequenceStep template. If a row exists for a
+// (campaign, physician, step), the drain sends it as-is and skips the AI rewrite for that one.
+model CampaignDraftOverride {
+  id          String   @id @default(uuid())
+  campaignId  String
+  physicianId String
+  stepNumber  Int
+  subject     String
+  body        String
+  generatedAt DateTime @default(now())
+  campaign    Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  physician   Physician @relation(fields: [physicianId], references: [id])
   @@unique([campaignId, physicianId, stepNumber])
 }

@@ -45,8 +45,10 @@ next-env.d.ts
 # Personal planning doc — not for review
 README_personal.md
 CLAUDE.md
+.claude/
 
 # Prisma generated client (v7+ generates outside node_modules)
 generated/
 *.db
 *.db-journal
+.claude/

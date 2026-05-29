@@ -1,11 +1,16 @@
 import { prisma } from "@/lib/db";
 import { generatePersonalizedEmail } from "@/lib/services/ai";
 import { sendOrSimulate } from "@/lib/services/mailer";
-import type { CreateCampaignInput } from "@/lib/validators/campaigns";
+import type {
+  CreateCampaignInput,
+  DraftOverrideInput,
+  PersistOverridesInput,
+} from "@/lib/validators/campaigns";
 
 // Typed errors so the route layer can map them to the right status code without sniffing strings.
 export class CampaignNotFoundError extends Error {}
 export class CampaignNotDraftError extends Error {}
+export class PhysicianNotFoundError extends Error {}
 
 export async function listCampaigns() {
   return prisma.campaign.findMany({
@@ -47,6 +52,40 @@ export async function createCampaign(data: CreateCampaignInput) {
       },
     }),
   );
+}
+
+// Builder-time: produce a personalized override draft for one physician on one step. The campaign
+// doesn't exist yet, so we work straight from the request + the physician record.
+export async function generateOverrideDraft(input: DraftOverrideInput) {
+  const physician = await prisma.physician.findUnique({ where: { id: input.physicianId } });
+  if (!physician) throw new PhysicianNotFoundError();
+
+  return generatePersonalizedEmail({
+    physician,
+    stepNumber: input.stepNumber,
+    brief: input.brief,
+    campaignName: input.campaignName,
+    campaignType: input.campaignType,
+    instruction: input.instruction,
+  });
+}
+
+// After the campaign is created, persist whatever overrides the user accumulated in the builder.
+export async function persistCampaignOverrides(campaignId: string, input: PersistOverridesInput) {
+  const campaign = await prisma.campaign.findUnique({ where: { id: campaignId }, select: { id: true } });
+  if (!campaign) throw new CampaignNotFoundError();
+
+  await prisma.campaignDraftOverride.createMany({
+    data: input.overrides.map((o) => ({
+      campaignId,
+      physicianId: o.physicianId,
+      stepNumber: o.stepNumber,
+      subject: o.subject,
+      body: o.body,
+    })),
+  });
+
+  return { count: input.overrides.length };
 }
 
 export async function getCampaignById(id: string) {
@@ -146,23 +185,39 @@ export async function drainPendingSends(campaignId: string) {
       continue;
     }
 
+    // If the user wrote a custom override for this physician/step, it's already final — send it
+    // verbatim and skip the AI call entirely. Otherwise fall back to the shared-template rewrite.
+    const override = await prisma.campaignDraftOverride.findUnique({
+      where: {
+        campaignId_physicianId_stepNumber: {
+          campaignId,
+          physicianId: physician.id,
+          stepNumber: item.stepNumber,
+        },
+      },
+    });
+
     let email: { subject: string; body: string };
-    try {
-      email = await generatePersonalizedEmail({
-        brief: step.bodyTemplate,
-        physician,
-        stepNumber: item.stepNumber,
-      });
-    } catch (err) {
-      // Gemini choked on this one. Mark the enrollment bounced so the dashboard shows the failure,
-      // then drop the pending row so the queue keeps draining instead of stalling on a bad recipient.
-      console.error(`drain: AI failed for physician ${physician.id} in campaign ${campaignId}`, err);
-      await prisma.campaignEnrollment.updateMany({
-        where: { campaignId, physicianId: physician.id },
-        data: { status: "bounced" },
-      });
-      await prisma.pendingSend.delete({ where: { id: item.id } });
-      continue;
+    if (override) {
+      email = { subject: override.subject, body: override.body };
+    } else {
+      try {
+        email = await generatePersonalizedEmail({
+          brief: step.bodyTemplate,
+          physician,
+          stepNumber: item.stepNumber,
+        });
+      } catch (err) {
+        // Gemini choked on this one. Mark the enrollment bounced so the dashboard shows the failure,
+        // then drop the pending row so the queue keeps draining instead of stalling on a bad recipient.
+        console.error(`drain: AI failed for physician ${physician.id} in campaign ${campaignId}`, err);
+        await prisma.campaignEnrollment.updateMany({
+          where: { campaignId, physicianId: physician.id },
+          data: { status: "bounced" },
+        });
+        await prisma.pendingSend.delete({ where: { id: item.id } });
+        continue;
+      }
     }
 
     const result = await sendOrSimulate({

@@ -20,3 +20,14 @@ export const physicianQuerySchema = z.object({
 });
 
 export type PhysicianQuery = z.infer<typeof physicianQuerySchema>;
+
+// The filter params (everything except pagination). Shared so the page's "any filter active?" check
+// and the sidebar's "Clear all" button stay in sync with one list.
+export const PHYSICIAN_FILTER_KEYS = [
+  "specialty",
+  "subSpecialty",
+  "state",
+  "affiliation",
+  "minYearsExperience",
+  "search",
+] as const;

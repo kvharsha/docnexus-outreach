@@ -24,7 +24,7 @@ Hard rules:
 - Do not promise clinical outcomes.
 - Do not make superlative claims about any therapy.
 - Do not invent drug names. Do not invent doctor or hospital names.
-- Use the provided sender name, title, and company in the signature. Never output placeholder brackets like [Your Name] or [Company]. If a detail is missing, omit it rather than inserting a placeholder.
+- Use the provided sender name, title, and company in the signature. NEVER output bracketed placeholders of any kind — not [Your Name], [Company], [Conference Name], [Date], [Product], [Topic], or anything in square or curly brackets. If a detail isn't provided, rephrase so it isn't needed; do not leave a blank to fill in.
 
 Output format: a single JSON object, no markdown fences, no preamble.
 {"subject": "string under 80 chars", "body": "string between 90 and 160 words"}`;
@@ -125,17 +125,43 @@ Sender:
 }
 
 export async function generatePersonalizedEmail(params: {
-  brief: string;
   physician: Physician;
   stepNumber: number;
+  // Optional: the shared bodyTemplate to rewrite. If omitted, the model writes from scratch using
+  // the campaign context + physician profile below.
+  brief?: string;
+  // Optional campaign context — useful when there's no brief to anchor the email's intent.
+  campaignName?: string;
+  campaignType?: string;
+  // Optional sender-supplied context about this specific physician. When present it takes priority
+  // for shaping the content — it's the whole reason a per-physician override differs from the shared draft.
+  instruction?: string;
 }): Promise<EmailDraft> {
-  const { brief, physician, stepNumber } = params;
+  const { brief, physician, stepNumber, campaignName, campaignType, instruction } = params;
   const yearsInPractice = new Date().getFullYear() - physician.npiRegistrationYear;
   const subSpecialty = physician.subSpecialty ?? physician.specialty;
+  const typeLabel = campaignType ? (CAMPAIGN_TYPE_LABELS[campaignType] ?? campaignType) : undefined;
 
-  const userPrompt = `Brief to personalize:
-${brief}
+  // Anchor the email's intent on the brief when we have one; otherwise lean on campaign context so
+  // the model still knows what the outreach is for.
+  const intent = brief
+    ? `Brief to personalize:\n${brief}`
+    : `No draft was provided — write this email from scratch using the campaign context and physician profile below.`;
 
+  const campaignContext = [
+    campaignName ? `- Campaign: ${campaignName}` : null,
+    typeLabel ? `- Campaign type: ${typeLabel}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  // The instruction shapes the content most strongly, so give it its own labelled block.
+  const instructionBlock = instruction
+    ? `\nThe sender has provided this specific context about their relationship with this physician — incorporate it naturally and let it shape the email's angle: ${instruction}\n`
+    : "";
+
+  const userPrompt = `${intent}
+${campaignContext ? `\nCampaign context:\n${campaignContext}\n` : ""}${instructionBlock}
 Physician profile:
 - Name: Dr. ${physician.firstName} ${physician.lastName}
 - Specialty: ${physician.specialty}
@@ -150,7 +176,7 @@ Sender:
 - Title: ${SENDER.title}
 - Company: ${SENDER.company}
 
-Rewrite the brief as a personalized email to Dr. ${physician.lastName}. Reference their ${subSpecialty} focus at ${physician.affiliation} naturally. Keep the original intent but make it feel individually written.`;
+Write a personalized email to Dr. ${physician.lastName}. Reference their ${subSpecialty} focus at ${physician.affiliation} naturally, and make it feel individually written.${brief ? " Keep the original intent of the brief." : ""}${instruction ? " The sender-provided context above is the most important thing to get right." : ""}`;
 
   return generate(userPrompt);
 }
