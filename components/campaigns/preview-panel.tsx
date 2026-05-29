@@ -52,8 +52,8 @@ export function PreviewPanel({
             Preview · <span className="tabular-nums">Step {stepNumber}</span>
           </h3>
           <p className="mt-1 text-xs text-zinc-400">
-            Preview shows basic variable substitution. Launch personalizes each email individually
-            via AI.
+            This is what gets sent: the template with each physician&apos;s details filled in (or
+            their saved override, verbatim). No AI runs at launch.
           </p>
         </div>
 

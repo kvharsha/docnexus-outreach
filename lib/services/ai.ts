@@ -1,5 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import OpenAI from "openai";
+import Groq from "groq-sdk";
 
 import type { Physician } from "@/generated/prisma/client";
 
@@ -71,6 +72,20 @@ async function callOpenAI(apiKey: string, systemPrompt: string, userPrompt: stri
   return parseDraft(completion.choices[0]?.message?.content ?? undefined);
 }
 
+async function callGroq(groqKey: string, systemPrompt: string, userPrompt: string): Promise<EmailDraft> {
+  const client = new Groq({ apiKey: groqKey });
+  const completion = await client.chat.completions.create({
+    model: "llama-3.1-8b-instant",
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+  });
+  // content is string | null; parseDraft wants string | undefined.
+  return parseDraft(completion.choices[0]?.message?.content ?? undefined);
+}
+
 // Gemini sometimes wraps JSON in ```json fences despite responseMimeType. Strip them before parsing
 // so one stray fence doesn't turn a perfectly good draft into a 502.
 function parseDraft(raw: string | undefined): EmailDraft {
@@ -108,10 +123,11 @@ function parseDraft(raw: string | undefined): EmailDraft {
 async function callLLM(systemPrompt: string, userPrompt: string): Promise<EmailDraft> {
   const geminiKey = process.env.GEMINI_API_KEY;
   const openaiKey = process.env.OPENAI_API_KEY;
+  const groqKey = process.env.GROQ_API_KEY;
 
   // Neither provider configured → operator problem, surfaced as a 503 by the route.
-  if (!geminiKey && !openaiKey) {
-    throw new AINotConfiguredError("No AI provider configured (set GEMINI_API_KEY or OPENAI_API_KEY)");
+  if (!geminiKey && !openaiKey && !groqKey) {
+    throw new AINotConfiguredError("No AI provider configured (set GEMINI_API_KEY or OPENAI_API_KEY or GROQ_API_KEY)");
   }
 
   // Primary: Gemini. If it works, we're done. If it throws and there's no fallback key, surface it.
@@ -119,7 +135,7 @@ async function callLLM(systemPrompt: string, userPrompt: string): Promise<EmailD
     try {
       return await callGemini(geminiKey, systemPrompt, userPrompt);
     } catch (err) {
-      if (!openaiKey) {
+      if (!openaiKey && !groqKey) {
         const detail = err instanceof Error ? err.message : "unknown error";
         throw new AIRequestError(`Gemini request failed: ${detail}`);
       }
@@ -128,11 +144,23 @@ async function callLLM(systemPrompt: string, userPrompt: string): Promise<EmailD
   }
 
   // Fallback: OpenAI. Reached when Gemini failed (and we have a key) or no Gemini key was set at all.
+  if (openaiKey) {
+    try {
+      return await callOpenAI(openaiKey, systemPrompt, userPrompt);
+    } catch (err) {
+      if (!groqKey) {
+        const detail = err instanceof Error ? err.message : "unknown error";
+        throw new AIRequestError(`OpenAI request failed: ${detail}`);
+      }
+      // Otherwise drop through to the Groq fallback below.
+    }
+  }
+  // Fallback: Groq. Reached when OpenAI failed (and we have a key) or no OpenAI key was set at all.
   try {
-    return await callOpenAI(openaiKey!, systemPrompt, userPrompt);
+    return await callGroq(groqKey!, systemPrompt, userPrompt);
   } catch (err) {
     const detail = err instanceof Error ? err.message : "unknown error";
-    throw new AIRequestError(`AI request failed (Gemini and OpenAI both unavailable): ${detail}`);
+    throw new AIRequestError(`AI request failed (Groq unavailable): ${detail}`);
   }
 }
 

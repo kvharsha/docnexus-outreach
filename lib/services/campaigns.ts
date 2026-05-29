@@ -1,6 +1,9 @@
 import { prisma } from "@/lib/db";
+// generatePersonalizedEmail is used ONLY by the builder's override drafting below — never in the
+// drain. At send time the shared template / saved override is the email; no AI runs.
 import { generatePersonalizedEmail } from "@/lib/services/ai";
 import { sendOrSimulate } from "@/lib/services/mailer";
+import { physicianToVars, renderTemplate } from "@/lib/utils/template";
 import type {
   CreateCampaignInput,
   DraftOverrideInput,
@@ -175,9 +178,10 @@ export async function getCampaignProgress(id: string) {
 }
 
 // Fire-and-forget worker kicked off by the launch route via setImmediate. Walks the PendingSend
-// queue one row at a time: personalize → send → record → delete. Pacing lives in the mailer, so
-// this loop just awaits each send. If the process dies mid-drain, the undeleted PendingSend rows
-// are the resume point — a re-launch endpoint would pick them back up (noted as future work).
+// queue one row at a time: render → send → record → delete. No AI runs here — the shared template
+// (already containing whatever the user generated in the builder) IS the email; we only substitute
+// {{variables}}. Pacing lives in the mailer. If the process dies mid-drain, the undeleted PendingSend
+// rows are the resume point — a re-launch endpoint would pick them back up (noted as future work).
 export async function drainPendingSends(campaignId: string) {
   const queue = await prisma.pendingSend.findMany({
     where: { campaignId },
@@ -199,8 +203,9 @@ export async function drainPendingSends(campaignId: string) {
       continue;
     }
 
-    // If the user wrote a custom override for this physician/step, it's already final — send it
-    // verbatim and skip the AI call entirely. Otherwise fall back to the shared-template rewrite.
+    // Pick the content. No AI at send time — either branch produces final text.
+    //   1. Override exists for this (physician, step) → send it verbatim (already final from the builder).
+    //   2. Otherwise → the shared template is the email; just substitute {{variables}} for this physician.
     const override = await prisma.campaignDraftOverride.findUnique({
       where: {
         campaignId_physicianId_stepNumber: {
@@ -211,36 +216,34 @@ export async function drainPendingSends(campaignId: string) {
       },
     });
 
-    let email: { subject: string; body: string };
-    if (override) {
-      email = { subject: override.subject, body: override.body };
-    } else {
-      try {
-        email = await generatePersonalizedEmail({
-          brief: step.bodyTemplate,
-          physician,
-          stepNumber: item.stepNumber,
-        });
-      } catch (err) {
-        // Gemini choked on this one. Mark the enrollment bounced so the dashboard shows the failure,
-        // then drop the pending row so the queue keeps draining instead of stalling on a bad recipient.
-        console.error(`drain: AI failed for physician ${physician.id} in campaign ${campaignId}`, err);
-        await prisma.campaignEnrollment.updateMany({
-          where: { campaignId, physicianId: physician.id },
-          data: { status: "bounced" },
-        });
-        await prisma.pendingSend.delete({ where: { id: item.id } });
-        continue;
-      }
+    const vars = physicianToVars(physician);
+    const email = override
+      ? { subject: override.subject, body: override.body }
+      : {
+          subject: renderTemplate(step.subjectTemplate, vars),
+          body: renderTemplate(step.bodyTemplate, vars),
+        };
+
+    let result: { simulated: boolean; messageId?: string };
+    try {
+      result = await sendOrSimulate({
+        to: physician.email,
+        subject: email.subject,
+        body: email.body,
+      });
+    } catch (err) {
+      // A real SMTP failure (bad address, Gmail rejection). Mark the enrollment bounced so the
+      // dashboard shows it, then drop the pending row so the queue keeps draining.
+      console.error(`drain: send failed for physician ${physician.id} in campaign ${campaignId}`, err);
+      await prisma.campaignEnrollment.updateMany({
+        where: { campaignId, physicianId: physician.id },
+        data: { status: "bounced" },
+      });
+      await prisma.pendingSend.delete({ where: { id: item.id } });
+      continue;
     }
 
-    const result = await sendOrSimulate({
-      to: physician.email,
-      subject: email.subject,
-      body: email.body,
-    });
-
-    // Record the send, advance the enrollment, and clear the queue row as one logical step.
+    // Record the send with the exact text we sent, advance the enrollment, clear the queue row.
     await prisma.$transaction([
       prisma.sentMessage.create({
         data: {

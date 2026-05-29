@@ -308,7 +308,9 @@ export function SequenceStepEditor({
               Generate with AI
             </Button>
             <p className="text-xs text-zinc-400">
-              AI generates a starting draft. Final emails are personalized per physician at launch.
+              AI writes a starting draft you can edit. Whatever you save here is what gets sent, with
+              {" "}
+              {`{{variables}}`} filled in per physician — no AI runs at launch.
             </p>
           </div>
         )}
