@@ -98,6 +98,20 @@ export async function getCampaignById(id: string) {
   });
 }
 
+// Everything the dashboard needs in one query: enrollments (with physician), sent messages (for the
+// real/simulated split), and just the override keys (to tag personalized recipients). Kept separate
+// from getCampaignById so the GET /api/campaigns/:id contract stays lean.
+export async function getCampaignDashboard(id: string) {
+  return prisma.campaign.findUnique({
+    where: { id },
+    include: {
+      enrollments: { include: { physician: true } },
+      sentMessages: true,
+      overrides: { select: { physicianId: true, stepNumber: true } },
+    },
+  });
+}
+
 export async function launchCampaign(id: string) {
   // The whole launch is one transaction: re-read status, queue the sends, flip to active — atomically.
   // Reading status inside the tx (not before it) closes the double-launch race on serverless.

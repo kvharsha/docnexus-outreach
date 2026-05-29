@@ -1,4 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
+import OpenAI from "openai";
 
 import type { Physician } from "@/generated/prisma/client";
 
@@ -7,10 +8,11 @@ import type { Physician } from "@/generated/prisma/client";
 export class AINotConfiguredError extends Error {}
 export class AIRequestError extends Error {}
 
-const MODEL = "gemini-2.5-flash";
+const GEMINI_MODEL = "gemini-2.5-flash";
+const OPENAI_MODEL = "gpt-4o-mini";
 
 const SENDER = {
-  name: "Jordan Mitchell",
+  name: "Harshaa KV",
   title: "Medical Science Liaison",
   company: "DocNexus Therapeutics",
 };
@@ -37,10 +39,36 @@ const CAMPAIGN_TYPE_LABELS: Record<string, string> = {
   conference_followup: "conference follow-up (recipient was met at a recent event)",
 };
 
-function getClient(): GoogleGenAI {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new AINotConfiguredError("GEMINI_API_KEY is not set");
-  return new GoogleGenAI({ apiKey });
+// One round-trip to Gemini. Throws on any SDK/parse error so callLLM can decide whether to fall back.
+async function callGemini(apiKey: string, systemPrompt: string, userPrompt: string): Promise<EmailDraft> {
+  const ai = new GoogleGenAI({ apiKey });
+  const result = await ai.models.generateContent({
+    model: GEMINI_MODEL,
+    contents: userPrompt,
+    config: {
+      systemInstruction: systemPrompt,
+      // Ask for JSON directly so we rarely have to strip fences — but parseDraft still guards.
+      responseMimeType: "application/json",
+    },
+  });
+  // .text is a getter in the new SDK, not a method — calling it would throw.
+  return parseDraft(result.text);
+}
+
+// Same contract via OpenAI's chat API. response_format json_object makes the model emit a bare JSON
+// object, which parseDraft then validates exactly like the Gemini output.
+async function callOpenAI(apiKey: string, systemPrompt: string, userPrompt: string): Promise<EmailDraft> {
+  const client = new OpenAI({ apiKey });
+  const completion = await client.chat.completions.create({
+    model: OPENAI_MODEL,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+  });
+  // content is string | null; parseDraft wants string | undefined.
+  return parseDraft(completion.choices[0]?.message?.content ?? undefined);
 }
 
 // Gemini sometimes wraps JSON in ```json fences despite responseMimeType. Strip them before parsing
@@ -73,30 +101,39 @@ function parseDraft(raw: string | undefined): EmailDraft {
   return { subject, body };
 }
 
-async function generate(userPrompt: string): Promise<EmailDraft> {
-  const ai = getClient();
+// Single place the provider chain lives. Gemini's free tier is rate-limited and flaky — exactly the
+// kind of thing that dies mid-demo or mid-interview — so if it fails and an OpenAI key is present we
+// quietly fall back to gpt-4o-mini rather than showing the user an error. Both generateBrief and
+// generatePersonalizedEmail go through here, so the fallback is defined once.
+async function callLLM(systemPrompt: string, userPrompt: string): Promise<EmailDraft> {
+  const geminiKey = process.env.GEMINI_API_KEY;
+  const openaiKey = process.env.OPENAI_API_KEY;
 
-  let text: string | undefined;
-  try {
-    const result = await ai.models.generateContent({
-      model: MODEL,
-      contents: userPrompt,
-      config: {
-        systemInstruction: SYSTEM_PROMPT,
-        // Ask for JSON directly so we rarely have to strip fences — but parseDraft still guards.
-        responseMimeType: "application/json",
-      },
-    });
-    // .text is a getter in the new SDK, not a method — calling it would throw.
-    text = result.text;
-  } catch (err) {
-    // Re-wrap so the route only ever sees our typed errors, never a raw SDK exception.
-    if (err instanceof AINotConfiguredError) throw err;
-    const detail = err instanceof Error ? err.message : "unknown error";
-    throw new AIRequestError(`Gemini request failed: ${detail}`);
+  // Neither provider configured → operator problem, surfaced as a 503 by the route.
+  if (!geminiKey && !openaiKey) {
+    throw new AINotConfiguredError("No AI provider configured (set GEMINI_API_KEY or OPENAI_API_KEY)");
   }
 
-  return parseDraft(text);
+  // Primary: Gemini. If it works, we're done. If it throws and there's no fallback key, surface it.
+  if (geminiKey) {
+    try {
+      return await callGemini(geminiKey, systemPrompt, userPrompt);
+    } catch (err) {
+      if (!openaiKey) {
+        const detail = err instanceof Error ? err.message : "unknown error";
+        throw new AIRequestError(`Gemini request failed: ${detail}`);
+      }
+      // Otherwise drop through to the OpenAI fallback below.
+    }
+  }
+
+  // Fallback: OpenAI. Reached when Gemini failed (and we have a key) or no Gemini key was set at all.
+  try {
+    return await callOpenAI(openaiKey!, systemPrompt, userPrompt);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : "unknown error";
+    throw new AIRequestError(`AI request failed (Gemini and OpenAI both unavailable): ${detail}`);
+  }
 }
 
 export async function generateBrief(params: {
@@ -121,7 +158,7 @@ Sender:
 - Title: ${SENDER.title}
 - Company: ${SENDER.company}`;
 
-  return generate(userPrompt);
+  return callLLM(SYSTEM_PROMPT, userPrompt);
 }
 
 export async function generatePersonalizedEmail(params: {
@@ -178,5 +215,5 @@ Sender:
 
 Write a personalized email to Dr. ${physician.lastName}. Reference their ${subSpecialty} focus at ${physician.affiliation} naturally, and make it feel individually written.${brief ? " Keep the original intent of the brief." : ""}${instruction ? " The sender-provided context above is the most important thing to get right." : ""}`;
 
-  return generate(userPrompt);
+  return callLLM(SYSTEM_PROMPT, userPrompt);
 }
