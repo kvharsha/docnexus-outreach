@@ -20,6 +20,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
+// Reflect live DB state on every request (a just-launched campaign must never serve a cached view).
+export const dynamic = "force-dynamic";
+
 const TYPE_LABELS: Record<string, string> = {
   cold_outbound: "Cold Outbound",
   reengagement: "Re-engagement",

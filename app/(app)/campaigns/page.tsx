@@ -13,6 +13,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
+// Always query the DB on each request. Without this, Next prerenders this page statically at build
+// time — on Vercel that's against an empty prod DB, so the list would be permanently empty even
+// after campaigns are created at runtime.
+export const dynamic = "force-dynamic";
+
 const TYPE_LABELS: Record<string, string> = {
   cold_outbound: "Cold Outbound",
   reengagement: "Re-engagement",

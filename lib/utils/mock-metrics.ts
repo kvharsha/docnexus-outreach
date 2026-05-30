@@ -58,28 +58,37 @@ export function getActivitySeries(
 
 export type ContactStatus = "pending" | "contacted" | "replied" | "bounced";
 
-// Hashed per-physician status for physicians whose enrollment is still 'pending' (no real send yet).
-// Weighted roughly 70 contacted / 15 replied / 5 bounced / 10 pending, per the spec. "replied" here
-// is mock — we don't read the inbox, so a real reply is never actually detected.
-export function getMockContactStatus(campaignId: string, physicianId: string): ContactStatus {
-  const roll = hashString(`${campaignId}:${physicianId}`) % 100;
-  if (roll < 70) return "contacted";
-  if (roll < 85) return "replied";
-  if (roll < 90) return "bounced";
-  return "pending";
+// Share of *already-contacted* physicians shown as "Replied" on a completed campaign. Replied is a
+// strict subset of contacted — you can't reply to a message that was never sent.
+const MOCK_REPLIED_PCT = 20;
+
+// "Replied" is the one fully-mock status (we don't read the inbox). It's only ever layered on top of
+// a real "contacted" enrollment, and only for completed campaigns — see resolveContactStatus.
+function isMockReplied(campaignId: string, physicianId: string): boolean {
+  return hashString(`${campaignId}:${physicianId}:replied`) % 100 < MOCK_REPLIED_PCT;
 }
 
-// Decide what status to show for one physician.
-//  1. Real enrollment status always wins once the drain has written it (contacted / bounced).
-//  2. Otherwise the physician is still 'pending'. We only invent a mock status for launched
-//     (active/completed) campaigns — a draft has sent nothing, so everyone genuinely shows Pending.
+// Decide what status to show for one physician. Real CampaignEnrollment.status always wins; mock
+// only ever *upgrades* a real "contacted" to "replied", and never invents a status from nothing.
+//
+//  - bounced  → the drain marked it bounced. Show Bounced.
+//  - contacted → real send happened. Show Contacted — except on a *completed* campaign, where a
+//                deterministic subset is shown as Replied (replied ⊂ contacted). Never on an active
+//                campaign: reply detection isn't implemented, so "Replied" mid-send would be a lie.
+//  - pending  → not yet drained (active) or never launched (draft). Show Pending, honestly. No mock.
 export function resolveContactStatus(
   campaignId: string,
   physicianId: string,
   enrollmentStatus: string,
   campaignStatus: string,
 ): ContactStatus {
-  if (enrollmentStatus !== "pending") return enrollmentStatus as ContactStatus;
-  if (campaignStatus === "draft") return "pending";
-  return getMockContactStatus(campaignId, physicianId);
+  if (enrollmentStatus === "bounced") return "bounced";
+
+  if (enrollmentStatus === "contacted") {
+    if (campaignStatus === "completed" && isMockReplied(campaignId, physicianId)) return "replied";
+    return "contacted";
+  }
+
+  // Anything still 'pending' — draft, or an active campaign's not-yet-drained rows — stays Pending.
+  return "pending";
 }
