@@ -6,7 +6,9 @@ This is a take-home submission for a Full Stack Engineer internship at DocNexus.
 
 ## Live demo
 
-**https://docnexus.kvharshaavardhana.uk**
+**Live app:** https://docnexus.kvharshaavardhana.uk
+
+**Demo video:** https://drive.google.com/file/d/1F5yt5xartoUKnBpC4cgmtcfg_S_W2UzR/view?usp=sharing
 
 Deployed on Vercel, served behind my own domain via Cloudflare DNS (SSL end to end). The deployed instance runs on Neon Postgres; local development uses SQLite.
 
